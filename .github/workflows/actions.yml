@@ -29,7 +29,6 @@ jobs:
           check-latest: true
 
       - name: Run main.go
-        command: |
-          go run ./main.go
+        command: go run ./main.go
         env:
           TOKEN: $ {{ secrets.TOKEN }}
