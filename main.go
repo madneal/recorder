@@ -99,7 +99,7 @@ func convertFileToProgram(filepath string) []Program {
 			if len(names) > 1 {
 				name = names[1]
 			}
-			targetReg, _ := regexp.Compile(`\*\*Target:\*\*\s(\w+)\b`)
+			targetReg, _ := regexp.Compile("\\*\\*Target:\\*\\*\\s+`\\s+(.+)`")
 			targets := targetReg.FindStringSubmatch(block)
 			if len(targets) > 1 {
 				target = targets[1]
