@@ -9,11 +9,12 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v3
+        -
       - name: checkout bugcrowd-crowdstream
-        uses: actions/checkout@master
+        uses: actions/checkout@v3
         with:
           name: Linuxinet/bugcrowd-crowdstream
-          ref: refs/heads/master
 
       - name: list files
         run: |
