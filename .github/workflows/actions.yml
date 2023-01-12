@@ -14,7 +14,9 @@ jobs:
       - name: checkout bugcrowd-crowdstream
         uses: actions/checkout@v3
         with:
-          name: Linuxinet/bugcrowd-crowdstream
+          repository: Linuxinet/bugcrowd-crowdstream
+          path: bugcrowd
+          ref: master
 
       - name: list files
         run: |
