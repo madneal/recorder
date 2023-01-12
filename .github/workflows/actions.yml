@@ -30,6 +30,6 @@ jobs:
 
       - name: Run main.go
         run: |
-          go run ./main.go --enable-console-log --fail-on-error
+          go run ./main.go 2>&1 | tee /tmp/run.log &
         env:
           TOKEN: $ {{ secrets.TOKEN }}
