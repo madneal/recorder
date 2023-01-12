@@ -92,13 +92,19 @@ func convertFileToProgram(filepath string) []Program {
 	blocks := strings.Split(content, "Program Details : ")
 	for _, block := range blocks {
 		if strings.Contains(block, "Name") {
+			var name string
+			var target string
 			nameReg, _ := regexp.Compile(`\*\*Name:\*\*\s(\w+)\b`)
 			names := nameReg.FindStringSubmatch(block)
-			name := names[1]
+			if len(names) > 1 {
+				name = names[1]
+			}
 			targetReg, _ := regexp.Compile(`\*\*Target:\*\*\s(\w+)\b`)
 			targets := targetReg.FindStringSubmatch(block)
-			target := targets[1]
-			if !checkifProgramExist(name, target, programs) {
+			if len(targets) > 1 {
+				target = targets[1]
+			}
+			if !checkifProgramExist(name, target, programs) && name != "" && target != "" {
 				programs = append(programs, Program{
 					Name:   name,
 					Target: target,
