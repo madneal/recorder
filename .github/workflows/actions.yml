@@ -18,4 +18,4 @@ jobs:
 
       - name: list files
         run: |
-          ls -lah bugcrowd-crowdstream
+          ls -lah
