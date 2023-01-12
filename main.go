@@ -104,6 +104,12 @@ func convertFileToProgram(filepath string) []Program {
 			if len(targets) > 1 {
 				target = targets[1]
 			}
+			target = strings.ReplaceAll(target, "*.", "")
+			target = strings.ReplaceAll(target, "https://", "")
+			if !validHost(target) {
+				continue
+			}
+			fmt.Println(target)
 			if !checkifProgramExist(name, target, programs) && name != "" && target != "" {
 				programs = append(programs, Program{
 					Name:   name,
@@ -113,6 +119,15 @@ func convertFileToProgram(filepath string) []Program {
 		}
 	}
 	return programs
+}
+
+func validHost(host string) bool {
+	host = strings.Trim(host, " ")
+	re, _ := regexp.Compile(`^(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\-]*[a-zA-Z0-9])\.)*([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9\-]*[A-Za-z0-9])$`)
+	if re.MatchString(host) {
+		return true
+	}
+	return false
 }
 
 func checkifProgramExist(name, target string, programs []Program) bool {
