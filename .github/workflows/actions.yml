@@ -1,0 +1,20 @@
+name: load rules
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout bugcrowd-crowdstream
+        uses: actions/checkout@master
+        with:
+          name: Linuxinet/bugcrowd-crowdstream
+          ref: refs/heads/master
+
+      - name: list files
+        run: |
+          ls -lah bugcrowd-crowdstream
