@@ -14,7 +14,7 @@ jobs:
 
       - name: Remove Old folder
         run: |
-          - rm -rf bugcrowd
+          rm -rf bugcrowd
 
       - name: Checkout bugcrowd-crowdstream
         uses: actions/checkout@v3
