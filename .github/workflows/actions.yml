@@ -9,15 +9,25 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - name: Fetch Source
+        uses: actions/checkout@v3
 
-      - name: checkout bugcrowd-crowdstream
+      - name: Remove Old folder
+        run: |
+          - rm -rf bugcrowd
+
+      - name: Checkout bugcrowd-crowdstream
         uses: actions/checkout@v3
         with:
           repository: Linuxinet/bugcrowd-crowdstream
           path: bugcrowd
           ref: master
+      - name: Setup Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: '1.18'
+          check-latest: true
 
-      - name: list files
+      - name: Run main.go
         run: |
-          ls -lah bugcrowd
+          go run ./main.go
