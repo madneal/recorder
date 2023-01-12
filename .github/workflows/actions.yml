@@ -20,4 +20,4 @@ jobs:
 
       - name: list files
         run: |
-          ls -lah
+          ls -lah bugcrowd
