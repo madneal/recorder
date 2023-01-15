@@ -1,9 +1,7 @@
 name: load rules
-
 on:
-  push:
-    branches:
-      - master
+  schedule:
+    - cron: '0 12 * * *'
 
 jobs:
   build:
