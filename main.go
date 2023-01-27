@@ -54,7 +54,7 @@ func createRule(program Program) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-token", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJVVUlEIjoiMGYyYTA1ZWMtNWY2My00MDUyLWIyZjQtOGQ4YmQyMGM0NTkxIiwiSUQiOjEsIlVzZXJuYW1lIjoiZ3NoYXJrIiwiTmlja05hbWUiOiLotoXnuqfnrqHnkIblkZgiLCJBdXRob3JpdHlJZCI6Ijg4OCIsIkJ1ZmZlclRpbWUiOjg2NDAwLCJleHAiOjE2NzQxMTY4NzUsImlzcyI6InFtUGx1cyIsIm5iZiI6MTY3Mjk4ODU3N30.Dlt9MdliP7cZ8sWrdXnuKAI5rfZ4PWBYwSDYkDXjxCo")
+	req.Header.Set("x-token", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJVVUlEIjoiMGYyYTA1ZWMtNWY2My00MDUyLWIyZjQtOGQ4YmQyMGM0NTkxIiwiSUQiOjEsIlVzZXJuYW1lIjoiZ3NoYXJrIiwiTmlja05hbWUiOiLotoXnuqfnrqHnkIblkZgiLCJBdXRob3JpdHlJZCI6Ijg4OCIsIkJ1ZmZlclRpbWUiOjg2NDAwLCJleHAiOjE2NzUzMzM4ODUsImlzcyI6InFtUGx1cyIsIm5iZiI6MTY3NDcyODA4NX0.aoZ7tSHThVdpoPpbEiHdxcv9K0EOcfza3Sk6ERIsRdE")
 	_, err = http.DefaultClient.Do(req)
 	if err != nil {
 		fmt.Println(err)
