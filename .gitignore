@@ -3,3 +3,5 @@ dist
 weapp
 .DS_Store
 project.config.json
+.idea
+bugcrowd
