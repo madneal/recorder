@@ -2,6 +2,7 @@ package com.neal.recorder
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.ComponentName
 import android.content.ContentUris
 import android.content.Context
@@ -155,7 +156,7 @@ class MainActivity : Activity() {
 
         listView = ListView(this)
         listView.setOnItemClickListener { _, _, position, _ -> playRecording(recordings[position]) }
-        listView.setOnItemLongClickListener { _, _, position, _ -> shareRecording(recordings[position]); true }
+        listView.setOnItemLongClickListener { _, _, position, _ -> showRecordingActions(recordings[position]); true }
         root.addView(listView, LinearLayout.LayoutParams(-1, 0, 1f))
 
         return root
@@ -309,6 +310,41 @@ class MainActivity : Activity() {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         startActivity(Intent.createChooser(intent, "分享录音"))
+    }
+
+    private fun showRecordingActions(recording: Recording) {
+        AlertDialog.Builder(this)
+            .setTitle(recording.name)
+            .setItems(arrayOf("播放", "分享", "删除")) { _, which ->
+                when (which) {
+                    0 -> playRecording(recording)
+                    1 -> shareRecording(recording)
+                    2 -> confirmDelete(recording)
+                }
+            }
+            .show()
+    }
+
+    private fun confirmDelete(recording: Recording) {
+        AlertDialog.Builder(this)
+            .setTitle("删除录音？")
+            .setMessage(recording.name)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("删除") { _, _ -> deleteRecording(recording) }
+            .show()
+    }
+
+    private fun deleteRecording(recording: Recording) {
+        val deleted = contentResolver.delete(recording.uri, null, null)
+        if (deleted > 0) {
+            player?.release()
+            player = null
+            statusText.text = "已删除：${recording.name}"
+            refreshRecordings()
+        } else {
+            Toast.makeText(this, "删除失败：文件不存在或无法访问", Toast.LENGTH_LONG).show()
+            refreshRecordings()
+        }
     }
 
     private fun hasRecordPermission(): Boolean =
