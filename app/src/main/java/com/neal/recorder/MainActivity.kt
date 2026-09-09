@@ -17,21 +17,26 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.provider.MediaStore
+import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.EditText
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
+import org.json.JSONArray
+import org.json.JSONObject
 import java.util.Locale
 
 class MainActivity : Activity() {
 
     private data class Recording(val name: String, val uri: Uri, val durationMs: Long)
+    private data class Marker(val positionMs: Long, val label: String)
 
     companion object {
         private const val RECORD_AUDIO_REQUEST = 100
@@ -476,14 +481,31 @@ class MainActivity : Activity() {
         val recording = activeRecording ?: return
         val position = current.currentPosition.toLong()
         val markers = markersFor(recording).toMutableList()
-        if (markers.any { kotlin.math.abs(it - position) < 500L }) {
+        if (markers.any { kotlin.math.abs(it.positionMs - position) < 500L }) {
             statusText.text = "该位置附近已有标记"
             return
         }
-        markers += position
-        saveMarkers(recording, markers)
-        renderMarkers(recording)
-        statusText.text = "已添加标记：${formatDuration(position)}"
+
+        val input = EditText(this).apply {
+            hint = "例如：重点内容"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            isSingleLine = true
+        }
+        AlertDialog.Builder(this)
+            .setTitle("添加标记")
+            .setMessage("时间：${formatDuration(position)}")
+            .setView(input)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("保存") { _, _ ->
+                val label = input.text.toString().trim().ifEmpty {
+                    "标记 ${formatDuration(position)}"
+                }
+                markers += Marker(position, label)
+                saveMarkers(recording, markers)
+                renderMarkers(recording)
+                statusText.text = "已添加标记：$label"
+            }
+            .show()
     }
 
     private fun renderMarkers(recording: Recording?) {
@@ -494,37 +516,71 @@ class MainActivity : Activity() {
             return
         }
         val currentRecording = recording ?: return
-        markers.forEach { position ->
+        markers.forEach { marker ->
+            val time = formatDuration(marker.positionMs)
             markersContainer.addView(Button(this).apply {
-                text = formatDuration(position)
-                contentDescription = "跳转到 ${formatDuration(position)}"
+                text = "${marker.label}\n$time"
+                contentDescription = "${marker.label}，跳转到 $time"
                 setOnClickListener {
                     if (activeRecording?.uri != currentRecording.uri || player == null) {
                         playRecording(currentRecording)
                     }
-                    player?.seekTo(position.toInt())
+                    player?.seekTo(marker.positionMs.toInt())
                     updatePlaybackProgress()
                 }
             })
         }
     }
 
-    private fun markersFor(recording: Recording): List<Long> =
-        markerPreferences.getStringSet(markerKey(recording), emptySet())
-            .orEmpty()
-            .mapNotNull { it.toLongOrNull() }
-            .sorted()
+    private fun markersFor(recording: Recording): List<Marker> {
+        val encoded = markerPreferences.getString(markerDataKey(recording), null)
+        if (encoded != null) {
+            return runCatching {
+                val array = JSONArray(encoded)
+                val result = mutableListOf<Marker>()
+                for (index in 0 until array.length()) {
+                    val item = array.optJSONObject(index) ?: continue
+                    val position = item.optLong("positionMs", -1L)
+                    if (position >= 0L) {
+                        result += Marker(position, item.optString("label"))
+                    }
+                }
+                result.sortedBy { it.positionMs }
+            }.getOrDefault(emptyList())
+        }
 
-    private fun saveMarkers(recording: Recording, markers: List<Long>) {
+        return runCatching {
+            markerPreferences.getStringSet(markerKey(recording), emptySet())
+                .orEmpty()
+                .mapNotNull { it.toLongOrNull() }
+                .map { Marker(it, "") }
+                .sortedBy { it.positionMs }
+        }.getOrDefault(emptyList())
+    }
+
+    private fun saveMarkers(recording: Recording, markers: List<Marker>) {
+        val array = JSONArray()
+        markers.sortedBy { it.positionMs }.forEach { marker ->
+            array.put(
+                JSONObject()
+                    .put("positionMs", marker.positionMs)
+                    .put("label", marker.label)
+            )
+        }
         markerPreferences.edit()
-            .putStringSet(markerKey(recording), markers.map(Long::toString).toSet())
+            .putString(markerDataKey(recording), array.toString())
             .apply()
     }
 
     private fun markerKey(recording: Recording): String = "markers:${recording.uri}"
 
+    private fun markerDataKey(recording: Recording): String = "marker_data:${recording.uri}"
+
     private fun clearMarkers(recording: Recording) {
-        markerPreferences.edit().remove(markerKey(recording)).apply()
+        markerPreferences.edit()
+            .remove(markerKey(recording))
+            .remove(markerDataKey(recording))
+            .apply()
     }
 
     private fun shareRecording(recording: Recording) {
