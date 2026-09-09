@@ -403,9 +403,9 @@ class MainActivity : Activity() {
             it.release()
             player = null
             playbackSeekBar.progress = playbackSeekBar.max
-            playbackButton.text = "播放"
+            playbackButton.text = "重新播放"
             playbackButton.isEnabled = true
-            playbackStopButton.isEnabled = true
+            playbackStopButton.isEnabled = false
             markButton.isEnabled = false
             playbackTimeText.text =
                 "${formatDuration(playbackSeekBar.max.toLong())} / ${formatDuration(playbackSeekBar.max.toLong())}"
@@ -419,7 +419,11 @@ class MainActivity : Activity() {
     }
 
     private fun togglePlayback() {
-        val current = player ?: return
+        val current = player
+        if (current == null) {
+            activeRecording?.let { playRecording(it) }
+            return
+        }
         if (current.isPlaying) {
             current.pause()
             handler.removeCallbacks(playbackRunnable)
