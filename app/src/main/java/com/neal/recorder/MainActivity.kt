@@ -21,8 +21,10 @@ import android.view.Gravity
 import android.view.View
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ListView
+import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import java.util.Locale
@@ -41,13 +43,34 @@ class MainActivity : Activity() {
     private lateinit var pauseButton: Button
     private lateinit var stopButton: Button
     private lateinit var listView: ListView
+    private lateinit var playbackTitleText: TextView
+    private lateinit var playbackTimeText: TextView
+    private lateinit var playbackSeekBar: SeekBar
+    private lateinit var playbackButton: Button
+    private lateinit var playbackStopButton: Button
+    private lateinit var markButton: Button
+    private lateinit var markersContainer: LinearLayout
 
     private val handler = Handler(Looper.getMainLooper())
+    private val markerPreferences by lazy {
+        getSharedPreferences("recording_markers", MODE_PRIVATE)
+    }
     private var service: RecorderService? = null
     private var serviceBound = false
     private var pendingStart = false
     private var player: MediaPlayer? = null
+    private var activeRecording: Recording? = null
+    private var userSeekingPlayback = false
     private var recordings = emptyList<Recording>()
+
+    private val playbackRunnable = object : Runnable {
+        override fun run() {
+            val current = player
+            if (current == null) return
+            if (!userSeekingPlayback) updatePlaybackProgress()
+            if (current.isPlaying) handler.postDelayed(this, 200)
+        }
+    }
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -89,8 +112,7 @@ class MainActivity : Activity() {
 
     override fun onStop() {
         handler.removeCallbacks(refreshRunnable)
-        player?.release()
-        player = null
+        stopPlayback()
         if (serviceBound) {
             unbindService(serviceConnection)
             serviceBound = false
@@ -147,8 +169,81 @@ class MainActivity : Activity() {
         controls.addView(stopButton)
         root.addView(controls, LinearLayout.LayoutParams(-1, -2))
 
+        playbackTitleText = TextView(this).apply {
+            text = "未选择录音"
+            textSize = 16f
+            setPadding(0, 24, 0, 0)
+        }
+        root.addView(playbackTitleText, LinearLayout.LayoutParams(-1, -2))
+
+        playbackTimeText = TextView(this).apply {
+            text = "00:00 / 00:00"
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
+        root.addView(playbackTimeText, LinearLayout.LayoutParams(-1, -2))
+
+        playbackSeekBar = SeekBar(this).apply {
+            max = 1
+            isEnabled = false
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (fromUser) {
+                        playbackTimeText.text =
+                            "${formatDuration(progress.toLong())} / ${formatDuration((seekBar?.max ?: 0).toLong())}"
+                    }
+                }
+
+                override fun onStartTrackingTouch(seekBar: SeekBar?) {
+                    userSeekingPlayback = true
+                }
+
+                override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                    userSeekingPlayback = false
+                    player?.seekTo(seekBar?.progress ?: 0)
+                    updatePlaybackProgress()
+                }
+            })
+        }
+        root.addView(playbackSeekBar, LinearLayout.LayoutParams(-1, -2))
+
+        val playbackControls = LinearLayout(this).apply {
+            gravity = Gravity.CENTER
+        }
+        playbackButton = Button(this).apply {
+            text = "播放"
+            isEnabled = false
+            setOnClickListener { togglePlayback() }
+        }
+        playbackStopButton = Button(this).apply {
+            text = "停止播放"
+            isEnabled = false
+            setOnClickListener { stopPlayback() }
+        }
+        markButton = Button(this).apply {
+            text = "添加标记"
+            isEnabled = false
+            setOnClickListener { addMarker() }
+        }
+        playbackControls.addView(playbackButton)
+        playbackControls.addView(playbackStopButton)
+        playbackControls.addView(markButton)
+        root.addView(playbackControls, LinearLayout.LayoutParams(-1, -2))
+
+        val markerTitle = TextView(this).apply {
+            text = "标记点（点击跳转）"
+            setPadding(0, 12, 0, 4)
+        }
+        root.addView(markerTitle, LinearLayout.LayoutParams(-1, -2))
+
+        val markerScroll = HorizontalScrollView(this)
+        markersContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        markerScroll.addView(markersContainer)
+        root.addView(markerScroll, LinearLayout.LayoutParams(-1, -2))
+
         val listTitle = TextView(this).apply {
-            text = "我的录音（点击播放，长按分享）"
+            text = "我的录音（点击播放，长按操作）"
             textSize = 18f
             setPadding(0, 28, 0, 8)
         }
@@ -288,19 +383,144 @@ class MainActivity : Activity() {
     }
 
     private fun playRecording(recording: Recording) {
-        player?.release()
+        stopPlayback()
         player = MediaPlayer.create(this, recording.uri)
         if (player == null) {
             Toast.makeText(this, "无法播放该录音", Toast.LENGTH_SHORT).show()
             return
         }
+        activeRecording = recording
+        playbackSeekBar.max = player?.duration?.coerceAtLeast(1) ?: 1
+        playbackSeekBar.progress = 0
+        playbackSeekBar.isEnabled = true
+        playbackButton.isEnabled = true
+        playbackStopButton.isEnabled = true
+        markButton.isEnabled = true
+        playbackTitleText.text = recording.name
+        renderMarkers(recording)
         player?.setOnCompletionListener {
+            handler.removeCallbacks(playbackRunnable)
             it.release()
             player = null
+            playbackSeekBar.progress = playbackSeekBar.max
+            playbackButton.text = "播放"
+            playbackButton.isEnabled = true
+            playbackStopButton.isEnabled = true
+            markButton.isEnabled = false
+            playbackTimeText.text =
+                "${formatDuration(playbackSeekBar.max.toLong())} / ${formatDuration(playbackSeekBar.max.toLong())}"
             statusText.text = "播放完成"
         }
         player?.start()
+        playbackButton.text = "暂停"
         statusText.text = "正在播放：${recording.name}"
+        updatePlaybackProgress()
+        handler.post(playbackRunnable)
+    }
+
+    private fun togglePlayback() {
+        val current = player ?: return
+        if (current.isPlaying) {
+            current.pause()
+            handler.removeCallbacks(playbackRunnable)
+            playbackButton.text = "继续"
+            statusText.text = "已暂停播放"
+        } else {
+            if (current.currentPosition >= current.duration) current.seekTo(0)
+            current.start()
+            handler.post(playbackRunnable)
+            playbackButton.text = "暂停"
+            statusText.text = "正在播放：${activeRecording?.name.orEmpty()}"
+        }
+        updatePlaybackProgress()
+    }
+
+    private fun stopPlayback() {
+        handler.removeCallbacks(playbackRunnable)
+        player?.setOnCompletionListener(null)
+        player?.release()
+        player = null
+        activeRecording = null
+        userSeekingPlayback = false
+        if (::playbackTitleText.isInitialized) playbackTitleText.text = "未选择录音"
+        if (::playbackTimeText.isInitialized) playbackTimeText.text = "00:00 / 00:00"
+        if (::playbackSeekBar.isInitialized) playbackSeekBar.apply {
+            progress = 0
+            max = 1
+            isEnabled = false
+        }
+        if (::playbackButton.isInitialized) playbackButton.apply {
+            text = "播放"
+            isEnabled = false
+        }
+        if (::playbackStopButton.isInitialized) playbackStopButton.isEnabled = false
+        if (::markButton.isInitialized) markButton.isEnabled = false
+        if (::markersContainer.isInitialized) renderMarkers(null)
+    }
+
+    private fun updatePlaybackProgress() {
+        val current = player ?: return
+        val duration = current.duration.coerceAtLeast(1)
+        val position = current.currentPosition.coerceIn(0, duration)
+        playbackSeekBar.max = duration
+        if (!userSeekingPlayback) playbackSeekBar.progress = position
+        playbackTimeText.text = "${formatDuration(position.toLong())} / ${formatDuration(duration.toLong())}"
+    }
+
+    private fun addMarker() {
+        val current = player ?: return
+        val recording = activeRecording ?: return
+        val position = current.currentPosition.toLong()
+        val markers = markersFor(recording).toMutableList()
+        if (markers.any { kotlin.math.abs(it - position) < 500L }) {
+            statusText.text = "该位置附近已有标记"
+            return
+        }
+        markers += position
+        saveMarkers(recording, markers)
+        renderMarkers(recording)
+        statusText.text = "已添加标记：${formatDuration(position)}"
+    }
+
+    private fun renderMarkers(recording: Recording?) {
+        markersContainer.removeAllViews()
+        val markers = recording?.let { markersFor(it) }.orEmpty()
+        if (markers.isEmpty()) {
+            markersContainer.addView(TextView(this).apply { text = "暂无标记点" })
+            return
+        }
+        val currentRecording = recording ?: return
+        markers.forEach { position ->
+            markersContainer.addView(Button(this).apply {
+                text = formatDuration(position)
+                contentDescription = "跳转到 ${formatDuration(position)}"
+                setOnClickListener {
+                    if (activeRecording?.uri != currentRecording.uri || player == null) {
+                        playRecording(currentRecording)
+                    }
+                    player?.seekTo(position.toInt())
+                    updatePlaybackProgress()
+                }
+            })
+        }
+    }
+
+    private fun markersFor(recording: Recording): List<Long> =
+        markerPreferences.getStringSet(markerKey(recording), emptySet())
+            .orEmpty()
+            .mapNotNull { it.toLongOrNull() }
+            .sorted()
+
+    private fun saveMarkers(recording: Recording, markers: List<Long>) {
+        markerPreferences.edit()
+            .putStringSet(markerKey(recording), markers.map(Long::toString).toSet())
+            .apply()
+    }
+
+    private fun markerKey(recording: Recording): String = "markers:${recording.uri}"
+
+    private fun clearMarkers(recording: Recording) {
+        markerPreferences.edit().remove(markerKey(recording)).apply()
     }
 
     private fun shareRecording(recording: Recording) {
@@ -337,8 +557,8 @@ class MainActivity : Activity() {
     private fun deleteRecording(recording: Recording) {
         val deleted = contentResolver.delete(recording.uri, null, null)
         if (deleted > 0) {
-            player?.release()
-            player = null
+            if (activeRecording?.uri == recording.uri) stopPlayback()
+            clearMarkers(recording)
             statusText.text = "已删除：${recording.name}"
             refreshRecordings()
         } else {
