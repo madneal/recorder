@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ComponentName
+import android.content.ContentValues
 import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
@@ -595,14 +596,74 @@ class MainActivity : Activity() {
     private fun showRecordingActions(recording: Recording) {
         AlertDialog.Builder(this)
             .setTitle(recording.name)
-            .setItems(arrayOf("播放", "分享", "删除")) { _, which ->
+            .setItems(arrayOf("播放", "重命名", "分享", "删除")) { _, which ->
                 when (which) {
                     0 -> playRecording(recording)
-                    1 -> shareRecording(recording)
-                    2 -> confirmDelete(recording)
+                    1 -> confirmRename(recording)
+                    2 -> shareRecording(recording)
+                    3 -> confirmDelete(recording)
                 }
             }
             .show()
+    }
+
+    private fun confirmRename(recording: Recording) {
+        val baseName = if (recording.name.endsWith(".m4a", ignoreCase = true)) {
+            recording.name.dropLast(4)
+        } else {
+            recording.name
+        }
+        val input = EditText(this).apply {
+            setText(baseName)
+            setSelection(length())
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            isSingleLine = true
+        }
+        AlertDialog.Builder(this)
+            .setTitle("重命名录音")
+            .setMessage("文件格式为 M4A，扩展名会自动保留")
+            .setView(input)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("保存") { _, _ ->
+                renameRecording(recording, input.text.toString())
+            }
+            .show()
+    }
+
+    private fun renameRecording(recording: Recording, inputName: String) {
+        val trimmedName = inputName.trim()
+        if (trimmedName.isEmpty() || trimmedName == "." || trimmedName == ".." ||
+            trimmedName.contains('/') || trimmedName.contains('\\')
+        ) {
+            Toast.makeText(this, "名称不能为空，也不能包含路径分隔符", Toast.LENGTH_LONG).show()
+            return
+        }
+        val newName = if (trimmedName.endsWith(".m4a", ignoreCase = true)) {
+            trimmedName
+        } else {
+            "$trimmedName.m4a"
+        }
+        if (newName == recording.name) return
+
+        val updated = contentResolver.update(
+            recording.uri,
+            ContentValues().apply {
+                put(MediaStore.Audio.Media.DISPLAY_NAME, newName)
+            },
+            null,
+            null
+        )
+        if (updated > 0) {
+            val renamed = recording.copy(name = newName)
+            if (activeRecording?.uri == recording.uri) {
+                activeRecording = renamed
+                playbackTitleText.text = newName
+            }
+            statusText.text = "已重命名：$newName"
+            refreshRecordings()
+        } else {
+            Toast.makeText(this, "重命名失败：文件不存在或无法访问", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun confirmDelete(recording: Recording) {
