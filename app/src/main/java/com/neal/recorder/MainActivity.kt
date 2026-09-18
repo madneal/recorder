@@ -3,21 +3,26 @@ package com.neal.recorder
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.DownloadManager
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.ContentValues
 import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
 import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.provider.MediaStore
+import android.provider.Settings
 import android.text.InputType
 import android.view.Gravity
 import android.view.View
@@ -35,6 +40,8 @@ import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.net.HttpURLConnection
+import java.net.URL
 
 class MainActivity : Activity() {
 
@@ -45,9 +52,17 @@ class MainActivity : Activity() {
         val recordedAtMs: Long
     )
     private data class Marker(val positionMs: Long, val label: String)
+    private data class UpdateInfo(
+        val versionName: String,
+        val downloadUrl: String,
+        val fileName: String
+    )
 
     companion object {
         private const val RECORD_AUDIO_REQUEST = 100
+        private const val RELEASE_API_URL =
+            "https://api.github.com/repos/madneal/recorder/releases/latest"
+        private const val APK_MIME_TYPE = "application/vnd.android.package-archive"
     }
 
     private lateinit var statusText: TextView
@@ -75,6 +90,37 @@ class MainActivity : Activity() {
     private var activeRecording: Recording? = null
     private var userSeekingPlayback = false
     private var recordings = emptyList<Recording>()
+    private var updateCheckInProgress = false
+    private var updateDownloadId = -1L
+    private var pendingInstallUri: Uri? = null
+    private var updateReceiverRegistered = false
+
+    private val updateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != DownloadManager.ACTION_DOWNLOAD_COMPLETE) return
+            val downloadId = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
+            if (downloadId != updateDownloadId) return
+
+            val manager = getSystemService(DownloadManager::class.java)
+            var successful = false
+            manager.query(DownloadManager.Query().setFilterById(downloadId))?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val statusColumn = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
+                    successful = statusColumn >= 0 &&
+                        cursor.getInt(statusColumn) == DownloadManager.STATUS_SUCCESSFUL
+                }
+            }
+            val downloadedUri = if (successful) manager.getUriForDownloadedFile(downloadId) else null
+            updateDownloadId = -1L
+            runOnUiThread {
+                if (downloadedUri != null) {
+                    installUpdate(downloadedUri)
+                } else {
+                    Toast.makeText(this@MainActivity, "更新下载失败", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
 
     private val playbackRunnable = object : Runnable {
         override fun run() {
@@ -113,7 +159,9 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(createContentView())
+        registerUpdateReceiver()
         refreshRecordings()
+        handler.post { checkForUpdates(showNoUpdate = false) }
     }
 
     override fun onStart() {
@@ -131,6 +179,23 @@ class MainActivity : Activity() {
             serviceBound = false
         }
         super.onStop()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val uri = pendingInstallUri ?: return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls()) {
+            pendingInstallUri = null
+            launchInstaller(uri)
+        }
+    }
+
+    override fun onDestroy() {
+        if (updateReceiverRegistered) {
+            unregisterReceiver(updateReceiver)
+            updateReceiverRegistered = false
+        }
+        super.onDestroy()
     }
 
     private fun createContentView(): View {
@@ -181,6 +246,12 @@ class MainActivity : Activity() {
         controls.addView(pauseButton)
         controls.addView(stopButton)
         root.addView(controls, LinearLayout.LayoutParams(-1, -2))
+
+        val updateButton = Button(this).apply {
+            text = "检查更新"
+            setOnClickListener { checkForUpdates(showNoUpdate = true) }
+        }
+        root.addView(updateButton, LinearLayout.LayoutParams(-1, -2))
 
         playbackTitleText = TextView(this).apply {
             text = "未选择录音"
@@ -268,6 +339,135 @@ class MainActivity : Activity() {
         root.addView(listView, LinearLayout.LayoutParams(-1, 0, 1f))
 
         return root
+    }
+
+    private fun registerUpdateReceiver() {
+        val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(updateReceiver, filter, Context.RECEIVER_EXPORTED)
+        } else {
+            registerReceiver(updateReceiver, filter)
+        }
+        updateReceiverRegistered = true
+    }
+
+    private fun checkForUpdates(showNoUpdate: Boolean) {
+        if (updateCheckInProgress) return
+        updateCheckInProgress = true
+        Thread {
+            val update = runCatching {
+                fetchLatestRelease()
+            }.getOrNull()?.takeIf { isNewerVersion(it.versionName, BuildConfig.VERSION_NAME) }
+
+            runOnUiThread {
+                updateCheckInProgress = false
+                if (update != null) {
+                    showUpdateDialog(update)
+                } else if (showNoUpdate) {
+                    Toast.makeText(this, "当前已经是最新版本", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }.start()
+    }
+
+    private fun fetchLatestRelease(): UpdateInfo? {
+        val connection = (URL(RELEASE_API_URL).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 8_000
+            readTimeout = 10_000
+            setRequestProperty("Accept", "application/vnd.github+json")
+            setRequestProperty("User-Agent", "Recorder-Android-App")
+        }
+        return try {
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val release = JSONObject(body)
+            val versionName = release.getString("tag_name").removePrefix("v")
+            val assets = release.getJSONArray("assets")
+            for (index in 0 until assets.length()) {
+                val asset = assets.getJSONObject(index)
+                val fileName = asset.getString("name")
+                if (fileName.startsWith("recorder-") && fileName.endsWith(".apk")) {
+                    return UpdateInfo(
+                        versionName,
+                        asset.getString("browser_download_url"),
+                        fileName
+                    )
+                }
+            }
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun isNewerVersion(remote: String, local: String): Boolean {
+        val remoteParts = remote.substringBefore('-').split('.').map { it.toIntOrNull() ?: 0 }
+        val localParts = local.substringBefore('-').split('.').map { it.toIntOrNull() ?: 0 }
+        val count = maxOf(remoteParts.size, localParts.size)
+        for (index in 0 until count) {
+            val remotePart = remoteParts.getOrElse(index) { 0 }
+            val localPart = localParts.getOrElse(index) { 0 }
+            if (remotePart != localPart) return remotePart > localPart
+        }
+        return false
+    }
+
+    private fun showUpdateDialog(update: UpdateInfo) {
+        AlertDialog.Builder(this)
+            .setTitle("发现新版本 v${update.versionName}")
+            .setMessage("当前版本 v${BuildConfig.VERSION_NAME}，是否下载并安装更新？")
+            .setNegativeButton("稍后", null)
+            .setPositiveButton("下载更新") { _, _ -> downloadUpdate(update) }
+            .show()
+    }
+
+    private fun downloadUpdate(update: UpdateInfo) {
+        if (updateDownloadId != -1L) {
+            Toast.makeText(this, "更新正在下载", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val request = DownloadManager.Request(Uri.parse(update.downloadUrl)).apply {
+            setTitle("录音机 v${update.versionName}")
+            setDescription("正在下载更新包")
+            setMimeType(APK_MIME_TYPE)
+            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+            setAllowedOverMetered(true)
+            setAllowedOverRoaming(false)
+            setDestinationInExternalFilesDir(
+                this@MainActivity,
+                Environment.DIRECTORY_DOWNLOADS,
+                update.fileName
+            )
+        }
+        updateDownloadId = getSystemService(DownloadManager::class.java).enqueue(request)
+        Toast.makeText(this, "已开始下载更新", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun installUpdate(uri: Uri) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !packageManager.canRequestPackageInstalls()
+        ) {
+            pendingInstallUri = uri
+            Toast.makeText(this, "请允许录音机安装未知来源应用", Toast.LENGTH_LONG).show()
+            startActivity(
+                Intent(
+                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:$packageName")
+                )
+            )
+            return
+        }
+        launchInstaller(uri)
+    }
+
+    private fun launchInstaller(uri: Uri) {
+        startActivity(
+            Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, APK_MIME_TYPE)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+        )
     }
 
     private fun onStartClicked() {
