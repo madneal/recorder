@@ -32,11 +32,18 @@ import android.widget.TextView
 import android.widget.Toast
 import org.json.JSONArray
 import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 
 class MainActivity : Activity() {
 
-    private data class Recording(val name: String, val uri: Uri, val durationMs: Long)
+    private data class Recording(
+        val name: String,
+        val uri: Uri,
+        val durationMs: Long,
+        val recordedAtMs: Long
+    )
     private data class Marker(val positionMs: Long, val label: String)
 
     companion object {
@@ -357,7 +364,8 @@ class MainActivity : Activity() {
         val projection = arrayOf(
             MediaStore.Audio.Media._ID,
             MediaStore.Audio.Media.DISPLAY_NAME,
-            MediaStore.Audio.Media.DURATION
+            MediaStore.Audio.Media.DURATION,
+            MediaStore.Audio.Media.DATE_ADDED
         )
         val selection = "${MediaStore.MediaColumns.OWNER_PACKAGE_NAME}=?"
         val selectionArgs = arrayOf(packageName)
@@ -371,12 +379,14 @@ class MainActivity : Activity() {
             val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
             val nameColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DISPLAY_NAME)
             val durationColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
+            val dateAddedColumn = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DATE_ADDED)
             while (cursor.moveToNext()) {
                 val id = cursor.getLong(idColumn)
                 result += Recording(
                     cursor.getString(nameColumn),
                     ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id),
-                    cursor.getLong(durationColumn)
+                    cursor.getLong(durationColumn),
+                    cursor.getLong(dateAddedColumn) * 1000L
                 )
             }
         }
@@ -384,7 +394,9 @@ class MainActivity : Activity() {
         listView.adapter = ArrayAdapter(
             this,
             android.R.layout.simple_list_item_1,
-            recordings.map { "${it.name}\n${formatDuration(it.durationMs)}" }
+            recordings.map {
+                "${it.name}\n时长 ${formatDuration(it.durationMs)} · ${formatRecordedAt(it.recordedAtMs)}"
+            }
         )
     }
 
@@ -695,5 +707,10 @@ class MainActivity : Activity() {
     private fun formatDuration(milliseconds: Long): String {
         val seconds = milliseconds.coerceAtLeast(0L) / 1000
         return String.format(Locale.getDefault(), "%02d:%02d", seconds / 60, seconds % 60)
+    }
+
+    private fun formatRecordedAt(milliseconds: Long): String {
+        if (milliseconds <= 0L) return "时间未知"
+        return SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(milliseconds))
     }
 }
