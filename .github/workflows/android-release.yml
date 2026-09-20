@@ -36,9 +36,6 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      - name: Build APK
-        run: ./gradlew --no-daemon :app:assembleDebug
-
       - name: Resolve release tag
         id: release
         shell: bash
@@ -62,6 +59,13 @@ jobs:
           fi
 
           echo "tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "version_name=${release_tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build APK
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version_name }}
+          RELEASE_VERSION_CODE: ${{ github.run_number }}
+        run: ./gradlew --no-daemon :app:assembleDebug -PreleaseVersion="$RELEASE_VERSION" -PreleaseVersionCode="$RELEASE_VERSION_CODE"
 
       - name: Prepare release asset
         env:
