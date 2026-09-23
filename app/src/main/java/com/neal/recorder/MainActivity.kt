@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.app.DownloadManager
+import android.app.RecoverableSecurityException
 import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.ContentValues
@@ -63,6 +64,7 @@ class MainActivity : Activity() {
     companion object {
         private const val RECORD_AUDIO_REQUEST = 100
         private const val READ_AUDIO_REQUEST = 101
+        private const val DELETE_RECORDING_REQUEST = 102
         private const val RELEASE_API_URL =
             "https://api.github.com/repos/madneal/recorder/releases/latest"
         private const val APK_MIME_TYPE = "application/vnd.android.package-archive"
@@ -98,6 +100,7 @@ class MainActivity : Activity() {
     private var updateCheckInProgress = false
     private var updateDownloadId = -1L
     private var pendingInstallUri: Uri? = null
+    private var pendingDeleteRecording: Recording? = null
     private var updateReceiverRegistered = false
 
     private val updateReceiver = object : BroadcastReceiver() {
@@ -221,6 +224,21 @@ class MainActivity : Activity() {
             pendingInstallUri = null
             launchInstaller(uri)
         }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != DELETE_RECORDING_REQUEST) return
+
+        val recording = pendingDeleteRecording ?: return
+        pendingDeleteRecording = null
+        if (resultCode == RESULT_OK) {
+            clearMarkers(recording)
+            statusText.text = "已删除：${recording.name}"
+        } else {
+            statusText.text = "已取消删除"
+        }
+        refreshRecordings()
     }
 
     override fun onDestroy() {
@@ -1033,14 +1051,19 @@ class MainActivity : Activity() {
         }
         if (newName == recording.name) return
 
-        val updated = contentResolver.update(
-            recording.uri,
-            ContentValues().apply {
-                put(MediaStore.Audio.Media.DISPLAY_NAME, newName)
-            },
-            null,
-            null
-        )
+        val updated = try {
+            contentResolver.update(
+                recording.uri,
+                ContentValues().apply {
+                    put(MediaStore.Audio.Media.DISPLAY_NAME, newName)
+                },
+                null,
+                null
+            )
+        } catch (_: SecurityException) {
+            Toast.makeText(this, "该录音属于旧安装版本，暂时无法重命名", Toast.LENGTH_LONG).show()
+            return
+        }
         if (updated > 0) {
             val renamed = recording.copy(name = newName)
             if (activeRecording?.uri == recording.uri) {
@@ -1064,15 +1087,53 @@ class MainActivity : Activity() {
     }
 
     private fun deleteRecording(recording: Recording) {
-        val deleted = contentResolver.delete(recording.uri, null, null)
+        if (activeRecording?.uri == recording.uri) stopPlayback()
+
+        val deleted = try {
+            contentResolver.delete(recording.uri, null, null)
+        } catch (error: SecurityException) {
+            if (requestDeleteApproval(recording, error)) return
+            Toast.makeText(this, "删除失败：系统拒绝访问该录音", Toast.LENGTH_LONG).show()
+            refreshRecordings()
+            return
+        }
         if (deleted > 0) {
-            if (activeRecording?.uri == recording.uri) stopPlayback()
             clearMarkers(recording)
             statusText.text = "已删除：${recording.name}"
             refreshRecordings()
         } else {
             Toast.makeText(this, "删除失败：文件不存在或无法访问", Toast.LENGTH_LONG).show()
             refreshRecordings()
+        }
+    }
+
+    private fun requestDeleteApproval(
+        recording: Recording,
+        securityException: SecurityException
+    ): Boolean {
+        val intentSender = when {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.R -> runCatching {
+                MediaStore.createDeleteRequest(contentResolver, listOf(recording.uri)).intentSender
+            }.getOrNull()
+            securityException is RecoverableSecurityException ->
+                securityException.userAction.actionIntent.intentSender
+            else -> null
+        } ?: return false
+
+        pendingDeleteRecording = recording
+        return runCatching {
+            startIntentSenderForResult(
+                intentSender,
+                DELETE_RECORDING_REQUEST,
+                null,
+                0,
+                0,
+                0
+            )
+            true
+        }.getOrElse {
+            pendingDeleteRecording = null
+            false
         }
     }
 
