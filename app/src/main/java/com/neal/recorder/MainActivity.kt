@@ -62,6 +62,7 @@ class MainActivity : Activity() {
 
     companion object {
         private const val RECORD_AUDIO_REQUEST = 100
+        private const val READ_AUDIO_REQUEST = 101
         private const val RELEASE_API_URL =
             "https://api.github.com/repos/madneal/recorder/releases/latest"
         private const val APK_MIME_TYPE = "application/vnd.android.package-archive"
@@ -182,6 +183,7 @@ class MainActivity : Activity() {
         registerUpdateReceiver()
         recoverPendingRecordings()
         refreshRecordings()
+        handler.post { requestAudioReadPermissionIfNeeded() }
         handler.post { checkForUpdates(showNoUpdate = false) }
     }
 
@@ -245,15 +247,6 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_HORIZONTAL
         }
         root.addView(title, LinearLayout.LayoutParams(-1, -2))
-
-        val subtitle = TextView(this).apply {
-            text = "清晰记录每一个声音"
-            textSize = 13f
-            setTextColor(Color.rgb(106, 119, 138))
-            gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(0, 4, 0, 18)
-        }
-        root.addView(subtitle, LinearLayout.LayoutParams(-1, -2))
 
         statusText = TextView(this).apply {
             text = "准备就绪"
@@ -373,7 +366,7 @@ class MainActivity : Activity() {
         root.addView(playbackControls, LinearLayout.LayoutParams(-1, -2))
 
         val markerTitle = TextView(this).apply {
-            text = "标记点（点击跳转）"
+            text = "标记点"
             setTextColor(Color.rgb(66, 80, 99))
             setPadding(0, 12, 0, 4)
         }
@@ -387,7 +380,7 @@ class MainActivity : Activity() {
         root.addView(markerScroll, LinearLayout.LayoutParams(-1, -2))
 
         val listTitle = TextView(this).apply {
-            text = "我的录音（点击播放，长按操作）"
+            text = "我的录音"
             textSize = 18f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.rgb(24, 35, 52))
@@ -547,6 +540,13 @@ class MainActivity : Activity() {
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == READ_AUDIO_REQUEST) {
+            refreshRecordings()
+            if (!hasAudioReadPermission()) {
+                statusText.text = "未允许访问已有音频文件"
+            }
+            return
+        }
         if (requestCode != RECORD_AUDIO_REQUEST) return
         if (!hasRecordPermission()) {
             statusText.text = "需要麦克风权限才能录音"
@@ -661,8 +661,14 @@ class MainActivity : Activity() {
             MediaStore.Audio.Media.DURATION,
             MediaStore.Audio.Media.DATE_ADDED
         )
-        val selection = "${MediaStore.MediaColumns.OWNER_PACKAGE_NAME}=?"
-        val selectionArgs = arrayOf(packageName)
+        val selection = "${MediaStore.MediaColumns.RELATIVE_PATH}=? AND " +
+            "${MediaStore.Audio.Media.MIME_TYPE}=? AND " +
+            "${MediaStore.Audio.Media.IS_PENDING}=?"
+        val selectionArgs = arrayOf(
+            Environment.DIRECTORY_MUSIC + "/Recordings/",
+            "audio/mp4",
+            "0"
+        )
         contentResolver.query(
             MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
             projection,
@@ -692,6 +698,26 @@ class MainActivity : Activity() {
                 "${it.name}\n时长 ${formatDuration(it.durationMs)} · ${formatRecordedAt(it.recordedAtMs)}"
             }
         )
+    }
+
+    private fun requestAudioReadPermissionIfNeeded() {
+        if (hasAudioReadPermission()) return
+        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.READ_MEDIA_AUDIO
+        } else {
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+        requestPermissions(arrayOf(permission), READ_AUDIO_REQUEST)
+    }
+
+    private fun hasAudioReadPermission(): Boolean = when {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ->
+            checkSelfPermission(Manifest.permission.READ_MEDIA_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ->
+            checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) ==
+                PackageManager.PERMISSION_GRANTED
+        else -> true
     }
 
     private fun playRecording(recording: Recording) {

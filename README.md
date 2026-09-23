@@ -37,3 +37,5 @@ GitHub Release 使用固定的 Android 签名密钥构建，且每次发布会�
 首次录音需要授予麦克风权限。录音文件使用 `MediaStore` 写入公共音乐目录，不依赖 `READ_EXTERNAL_STORAGE` 或 `WRITE_EXTERNAL_STORAGE`。
 
 录音使用 Android 前台服务运行，系统仍要求服务持有一个低重要性的服务通知。该通知设置为锁屏隐藏，应用不会额外请求通知权限；系统自带的麦克风隐私指示器由 Android 控制，应用无法关闭。
+
+录音列表按公共目录 `Music/Recordings` 读取，不依赖单次安装的应用归属信息。卸载后重新安装时，Android 可能要求授予音频读取权限；允许后即可继续展示原有录音。
