@@ -82,8 +82,10 @@ class RecorderService : Service() {
                 MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
                 values
             ) ?: error("无法创建音频文件")
+            outputUri = uri
             val file = contentResolver.openFileDescriptor(uri, "w")
                 ?: error("无法打开音频文件")
+            outputFile = file
 
             val mediaRecorder = MediaRecorder(this).apply {
                 setAudioSource(MediaRecorder.AudioSource.MIC)
@@ -96,8 +98,6 @@ class RecorderService : Service() {
                 start()
             }
 
-            outputUri = uri
-            outputFile = file
             recorder = mediaRecorder
             startedAt = SystemClock.elapsedRealtime()
             accumulatedMs = 0L
@@ -105,10 +105,8 @@ class RecorderService : Service() {
             updateNotification("正在录音")
             null
         } catch (error: Exception) {
-            outputUri?.let { contentResolver.delete(it, null, null) }
+            finalizeOutputFile()
             outputUri = null
-            outputFile?.close()
-            outputFile = null
             recorder?.release()
             recorder = null
             error.message ?: "启动录音失败"
@@ -155,27 +153,14 @@ class RecorderService : Service() {
         } catch (error: Exception) {
             stopError = error
         } finally {
-            current.reset()
-            current.release()
+            runCatching { current.reset() }
+            runCatching { current.release() }
             recorder = null
             outputFile?.close()
             outputFile = null
         }
 
-        if (uri != null) {
-            if (stopError == null) {
-                contentResolver.update(
-                    uri,
-                    ContentValues().apply {
-                        put(MediaStore.Audio.Media.IS_PENDING, 0)
-                    },
-                    null,
-                    null
-                )
-            } else {
-                contentResolver.delete(uri, null, null)
-            }
-        }
+        if (uri != null) finalizeOutputFile(uri)
 
         outputUri = null
         paused = false
@@ -210,6 +195,22 @@ class RecorderService : Service() {
         notificationManager.notify(NOTIFICATION_ID, buildNotification(text))
     }
 
+    private fun finalizeOutputFile(uri: Uri? = null) {
+        val target = uri ?: outputUri
+        if (target != null) runCatching {
+            contentResolver.update(
+                target,
+                ContentValues().apply {
+                    put(MediaStore.Audio.Media.IS_PENDING, 0)
+                },
+                null,
+                null
+            )
+        }
+        outputFile?.close()
+        outputFile = null
+    }
+
     private fun buildNotification(text: String): Notification {
         val intent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
@@ -221,7 +222,7 @@ class RecorderService : Service() {
 
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setContentTitle("录音机")
+            .setContentTitle("recorder")
             .setContentText(text)
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_SERVICE)
