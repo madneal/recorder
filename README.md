@@ -25,6 +25,15 @@
 
 生成的 APK：`app/build/outputs/apk/debug/app-debug.apk`
 
+GitHub Release 使用固定的 Android 签名密钥构建，且每次发布会递增 `versionCode`，因此后续版本可以直接覆盖安装。仓库 Actions 需要配置以下 Secrets：
+
+- `RECORDER_KEYSTORE_BASE64`
+- `RECORDER_KEYSTORE_PASSWORD`
+- `RECORDER_KEY_ALIAS`
+- `RECORDER_KEY_PASSWORD`
+
+如果手机上安装的是旧临时签名版本，首次切换到固定签名版本前需要卸载旧版本；从固定签名版本开始，后续 APK 可以直接覆盖更新。
+
 首次录音需要授予麦克风权限。录音文件使用 `MediaStore` 写入公共音乐目录，不依赖 `READ_EXTERNAL_STORAGE` 或 `WRITE_EXTERNAL_STORAGE`。
 
 录音使用 Android 前台服务运行，系统仍要求服务持有一个低重要性的服务通知。该通知设置为锁屏隐藏，应用不会额外请求通知权限；系统自带的麦克风隐私指示器由 Android 控制，应用无法关闭。
