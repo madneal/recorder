@@ -36,6 +36,29 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
+      - name: Configure release signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.RECORDER_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.RECORDER_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.RECORDER_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.RECORDER_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$KEYSTORE_BASE64" || -z "$KEYSTORE_PASSWORD" || -z "$KEY_ALIAS" || -z "$KEY_PASSWORD" ]]; then
+            echo "Missing Android release signing secrets." >&2
+            echo "Configure RECORDER_KEYSTORE_BASE64, RECORDER_KEYSTORE_PASSWORD, RECORDER_KEY_ALIAS, and RECORDER_KEY_PASSWORD." >&2
+            exit 1
+          fi
+
+          keystore_path="$RUNNER_TEMP/recorder-release.jks"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
+          echo "RECORDER_KEYSTORE_PATH=$keystore_path" >> "$GITHUB_ENV"
+          echo "RECORDER_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "RECORDER_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "RECORDER_KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
+
       - name: Resolve release tag
         id: release
         shell: bash
@@ -65,12 +88,12 @@ jobs:
         env:
           RELEASE_VERSION: ${{ steps.release.outputs.version_name }}
           RELEASE_VERSION_CODE: ${{ github.run_number }}
-        run: ./gradlew --no-daemon :app:assembleDebug -PreleaseVersion="$RELEASE_VERSION" -PreleaseVersionCode="$RELEASE_VERSION_CODE"
+        run: ./gradlew --no-daemon :app:assembleRelease -PreleaseVersion="$RELEASE_VERSION" -PreleaseVersionCode="$RELEASE_VERSION_CODE"
 
       - name: Prepare release asset
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
-        run: cp app/build/outputs/apk/debug/app-debug.apk "recorder-${RELEASE_TAG}.apk"
+        run: cp app/build/outputs/apk/release/app-release.apk "recorder-${RELEASE_TAG}.apk"
 
       - name: Create GitHub release
         env:
