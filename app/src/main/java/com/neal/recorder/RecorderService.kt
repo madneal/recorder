@@ -17,6 +17,7 @@ import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.provider.MediaStore
+import java.io.FileDescriptor
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -26,6 +27,10 @@ class RecorderService : Service() {
     companion object {
         private const val CHANNEL_ID = "recording"
         private const val NOTIFICATION_ID = 1001
+        private const val RECORDING_BIT_RATE = 192_000
+        private const val RECORDING_SAMPLE_RATE = 48_000
+        private const val COMPATIBLE_BIT_RATE = 128_000
+        private const val COMPATIBLE_SAMPLE_RATE = 44_100
     }
 
     inner class LocalBinder : Binder() {
@@ -87,20 +92,28 @@ class RecorderService : Service() {
                 ?: error("无法打开音频文件")
             outputFile = file
 
-            val mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                MediaRecorder(this)
-            } else {
-                MediaRecorder()
-            }.apply {
-                setAudioSource(MediaRecorder.AudioSource.MIC)
-                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                setAudioEncodingBitRate(128000)
-                setAudioSamplingRate(44100)
-                setOutputFile(file.fileDescriptor)
-                prepare()
-                start()
-            }
+            val mediaRecorder = runCatching {
+                startMediaRecorder(
+                    audioSource = MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                    fileDescriptor = file.fileDescriptor,
+                    bitRate = RECORDING_BIT_RATE,
+                    sampleRate = RECORDING_SAMPLE_RATE
+                )
+            }.recoverCatching {
+                startMediaRecorder(
+                    audioSource = MediaRecorder.AudioSource.MIC,
+                    fileDescriptor = file.fileDescriptor,
+                    bitRate = RECORDING_BIT_RATE,
+                    sampleRate = RECORDING_SAMPLE_RATE
+                )
+            }.recoverCatching {
+                startMediaRecorder(
+                    audioSource = MediaRecorder.AudioSource.MIC,
+                    fileDescriptor = file.fileDescriptor,
+                    bitRate = COMPATIBLE_BIT_RATE,
+                    sampleRate = COMPATIBLE_SAMPLE_RATE
+                )
+            }.getOrThrow()
 
             recorder = mediaRecorder
             startedAt = SystemClock.elapsedRealtime()
@@ -180,6 +193,37 @@ class RecorderService : Service() {
     fun elapsedMs(): Long {
         if (recorder == null) return 0L
         return accumulatedMs + if (paused) 0L else SystemClock.elapsedRealtime() - startedAt
+    }
+
+    private fun startMediaRecorder(
+        audioSource: Int,
+        fileDescriptor: FileDescriptor,
+        bitRate: Int,
+        sampleRate: Int
+    ): MediaRecorder {
+        val mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            MediaRecorder(this)
+        } else {
+            MediaRecorder()
+        }
+
+        return try {
+            mediaRecorder.apply {
+                setAudioSource(audioSource)
+                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                setAudioChannels(1)
+                setAudioEncodingBitRate(bitRate)
+                setAudioSamplingRate(sampleRate)
+                setOutputFile(fileDescriptor)
+                prepare()
+                start()
+            }
+        } catch (error: Exception) {
+            runCatching { mediaRecorder.reset() }
+            runCatching { mediaRecorder.release() }
+            throw error
+        }
     }
 
     private fun ensureForeground(text: String) {
