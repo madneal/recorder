@@ -87,7 +87,11 @@ class RecorderService : Service() {
                 ?: error("无法打开音频文件")
             outputFile = file
 
-            val mediaRecorder = MediaRecorder(this).apply {
+            val mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                MediaRecorder(this)
+            } else {
+                MediaRecorder()
+            }.apply {
                 setAudioSource(MediaRecorder.AudioSource.MIC)
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
@@ -180,7 +184,7 @@ class RecorderService : Service() {
 
     private fun ensureForeground(text: String) {
         val notification = buildNotification(text)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             startForeground(
                 NOTIFICATION_ID,
                 notification,

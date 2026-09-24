@@ -1,6 +1,7 @@
 package com.neal.recorder
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
 import android.app.DownloadManager
@@ -54,6 +55,7 @@ class MainActivity : Activity() {
         val durationMs: Long,
         val recordedAtMs: Long
     )
+    private data class PendingRename(val recording: Recording, val newName: String)
     private data class Marker(val positionMs: Long, val label: String)
     private data class UpdateInfo(
         val versionName: String,
@@ -65,6 +67,7 @@ class MainActivity : Activity() {
         private const val RECORD_AUDIO_REQUEST = 100
         private const val READ_AUDIO_REQUEST = 101
         private const val DELETE_RECORDING_REQUEST = 102
+        private const val RENAME_RECORDING_REQUEST = 103
         private const val RELEASE_API_URL =
             "https://api.github.com/repos/madneal/recorder/releases/latest"
         private const val APK_MIME_TYPE = "application/vnd.android.package-archive"
@@ -101,6 +104,7 @@ class MainActivity : Activity() {
     private var updateDownloadId = -1L
     private var pendingInstallUri: Uri? = null
     private var pendingDeleteRecording: Recording? = null
+    private var pendingRename: PendingRename? = null
     private var updateReceiverRegistered = false
 
     private val updateReceiver = object : BroadcastReceiver() {
@@ -228,17 +232,28 @@ class MainActivity : Activity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != DELETE_RECORDING_REQUEST) return
-
-        val recording = pendingDeleteRecording ?: return
-        pendingDeleteRecording = null
-        if (resultCode == RESULT_OK) {
-            clearMarkers(recording)
-            statusText.text = "已删除：${recording.name}"
-        } else {
-            statusText.text = "已取消删除"
+        when (requestCode) {
+            DELETE_RECORDING_REQUEST -> {
+                val recording = pendingDeleteRecording ?: return
+                pendingDeleteRecording = null
+                if (resultCode == RESULT_OK) {
+                    clearMarkers(recording)
+                    statusText.text = "已删除：${recording.name}"
+                } else {
+                    statusText.text = "已取消删除"
+                }
+                refreshRecordings()
+            }
+            RENAME_RECORDING_REQUEST -> {
+                val rename = pendingRename ?: return
+                pendingRename = null
+                if (resultCode == RESULT_OK) {
+                    renameRecordingNow(rename.recording, rename.newName, requestApproval = false)
+                } else {
+                    statusText.text = "已取消重命名"
+                }
+            }
         }
-        refreshRecordings()
     }
 
     override fun onDestroy() {
@@ -407,13 +422,19 @@ class MainActivity : Activity() {
         root.addView(listTitle, LinearLayout.LayoutParams(-1, -2))
 
         listView = ListView(this)
-        listView.setOnItemClickListener { _, _, position, _ -> playRecording(recordings[position]) }
-        listView.setOnItemLongClickListener { _, _, position, _ -> showRecordingActions(recordings[position]); true }
+        listView.setOnItemClickListener { _, _, position, _ ->
+            recordings.getOrNull(position)?.let { playRecording(it) }
+        }
+        listView.setOnItemLongClickListener { _, _, position, _ ->
+            recordings.getOrNull(position)?.let { showRecordingActions(it) }
+            true
+        }
         root.addView(listView, LinearLayout.LayoutParams(-1, 0, 1f))
 
         return root
     }
 
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
     private fun registerUpdateReceiver() {
         val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -1051,6 +1072,14 @@ class MainActivity : Activity() {
         }
         if (newName == recording.name) return
 
+        renameRecordingNow(recording, newName)
+    }
+
+    private fun renameRecordingNow(
+        recording: Recording,
+        newName: String,
+        requestApproval: Boolean = true
+    ) {
         val updated = try {
             contentResolver.update(
                 recording.uri,
@@ -1060,8 +1089,9 @@ class MainActivity : Activity() {
                 null,
                 null
             )
-        } catch (_: SecurityException) {
-            Toast.makeText(this, "该录音属于旧安装版本，暂时无法重命名", Toast.LENGTH_LONG).show()
+        } catch (error: SecurityException) {
+            if (requestApproval && requestRenameApproval(recording, newName, error)) return
+            Toast.makeText(this, "重命名失败：系统拒绝访问该录音", Toast.LENGTH_LONG).show()
             return
         }
         if (updated > 0) {
@@ -1072,6 +1102,8 @@ class MainActivity : Activity() {
             }
             statusText.text = "已重命名：$newName"
             refreshRecordings()
+        } else if (requestApproval && requestRenameApproval(recording, newName, null)) {
+            return
         } else {
             Toast.makeText(this, "重命名失败：文件不存在或无法访问", Toast.LENGTH_LONG).show()
         }
@@ -1101,6 +1133,8 @@ class MainActivity : Activity() {
             clearMarkers(recording)
             statusText.text = "已删除：${recording.name}"
             refreshRecordings()
+        } else if (requestDeleteApproval(recording, null)) {
+            return
         } else {
             Toast.makeText(this, "删除失败：文件不存在或无法访问", Toast.LENGTH_LONG).show()
             refreshRecordings()
@@ -1109,7 +1143,7 @@ class MainActivity : Activity() {
 
     private fun requestDeleteApproval(
         recording: Recording,
-        securityException: SecurityException
+        securityException: SecurityException?
     ): Boolean {
         val intentSender = when {
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.R -> runCatching {
@@ -1133,6 +1167,37 @@ class MainActivity : Activity() {
             true
         }.getOrElse {
             pendingDeleteRecording = null
+            false
+        }
+    }
+
+    private fun requestRenameApproval(
+        recording: Recording,
+        newName: String,
+        securityException: SecurityException?
+    ): Boolean {
+        val intentSender = when {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.R -> runCatching {
+                MediaStore.createWriteRequest(contentResolver, listOf(recording.uri)).intentSender
+            }.getOrNull()
+            securityException is RecoverableSecurityException ->
+                securityException.userAction.actionIntent.intentSender
+            else -> null
+        } ?: return false
+
+        pendingRename = PendingRename(recording, newName)
+        return runCatching {
+            startIntentSenderForResult(
+                intentSender,
+                RENAME_RECORDING_REQUEST,
+                null,
+                0,
+                0,
+                0
+            )
+            true
+        }.getOrElse {
+            pendingRename = null
             false
         }
     }
